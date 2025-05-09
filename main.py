@@ -1,32 +1,27 @@
 import os
 import logging
-import tempfile
-from telegram import Update, InputMediaPhoto, InputMediaVideo
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    BotCommand
+)
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters
 )
-from PIL import Image, ImageDraw, ImageFont
-import moviepy.editor as mp
+from datetime import datetime, timedelta
+import pytz
+import asyncio
 
 # ===== CONFIGURATION =====
-TOKEN = os.getenv("TELEGRAM_TOKEN")  # Required
-BOT_USERNAME = os.getenv("BOT_USERNAME")  # e.g., "@yourbot"
-CHANNEL_ID = os.getenv("CHANNEL_ID")  # e.g., "@yourchannel"
-ADMIN_IDS = [int(id) for id in os.getenv("ADMIN_IDS", "").split(",") if id]  # Comma-separated
-
-# Media settings
-STICKER_PATH = "sticker.png"
-WATERMARK_TEXT = "@YourBrand"
-FONT_PATH = "arial.ttf"
-STICKER_SIZE = 0.15
-TEXT_POSITION = "bottom-center"
-TEXT_COLOR = (255, 255, 255)
-TEXT_OUTLINE = (0, 0, 0)
-TEXT_SIZE_RATIO = 0.05
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+ADMIN_IDS = [int(id) for id in os.getenv("ADMIN_IDS", "").split(",") if id]
+TIMEZONE = pytz.timezone(os.getenv("TIMEZONE", "UTC"))
 
 # ===== LOGGING =====
 logging.basicConfig(
@@ -35,190 +30,215 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ===== MEDIA PROCESSING =====
-async def process_image(input_path: str, output_path: str) -> bool:
-    """Add watermark to image"""
-    try:
-        img = Image.open(input_path).convert("RGBA")
-        draw = ImageDraw.Draw(img)
-        
-        # Load font
-        try:
-            font = ImageFont.truetype(FONT_PATH, int(img.width * TEXT_SIZE_RATIO))
-        except:
-            font = ImageFont.load_default()
-        
-        # Add text watermark
-        text = WATERMARK_TEXT
-        text_width = draw.textlength(text, font=font)
-        
-        if TEXT_POSITION == "bottom-center":
-            position = (
-                (img.width - text_width) // 2,
-                img.height - int(img.height * 0.05)
-            )
-        
-        # Text outline
-        for x in [-1, 0, 1]:
-            for y in [-1, 0, 1]:
-                draw.text(
-                    (position[0] + x, position[1] + y),
-                    text,
-                    font=font,
-                    fill=TEXT_OUTLINE
-                )
-        
-        # Main text
-        draw.text(position, text, font=font, fill=TEXT_COLOR)
-        
-        # Add sticker
-        if os.path.exists(STICKER_PATH):
-            sticker = Image.open(STICKER_PATH).convert("RGBA")
-            sticker_width = int(img.width * STICKER_SIZE)
-            sticker = sticker.resize(
-                (sticker_width, int(sticker_width * sticker.height / sticker.width)),
-                Image.Resampling.LANCZOS
-            )
-            img.paste(
-                sticker,
-                (img.width - sticker.width - 10, img.height - sticker.height - 10),
-                sticker
-            )
-        
-        img.save(output_path, "PNG")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Image processing failed: {e}")
-        return False
+# ===== DATABASE SETUP (Example using TinyDB) =====
+from tinydb import TinyDB, Query
+db = TinyDB('db.json')
+channels_db = db.table('channels')
+scheduled_posts_db = db.table('scheduled_posts')
 
-async def process_video(input_path: str, output_path: str) -> bool:
-    """Add watermark to video"""
-    try:
-        video = mp.VideoFileClip(input_path)
-        
-        # Text watermark
-        txt_clip = (mp.TextClip(
-            WATERMARK_TEXT,
-            fontsize=video.w * TEXT_SIZE_RATIO,
-            color='white',
-            stroke_color='black',
-            stroke_width=2
-        )
-        .set_position(("center", "bottom"))
-        .set_duration(video.duration))
-        
-        final = mp.CompositeVideoClip([video, txt_clip])
-        final.write_videofile(
-            output_path,
-            codec="libx264",
-            audio_codec="aac",
-            threads=4,
-            preset='ultrafast'
-        )
-        return True
-        
-    except Exception as e:
-        logger.error(f"Video processing failed: {e}")
-        return False
-    finally:
-        if 'video' in locals(): video.close()
-        if 'final' in locals(): final.close()
+# ===== KEYBOARDS =====
+def main_menu_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 Create Post", callback_data="create_post")],
+        [InlineKeyboardButton("🗓 Scheduled Posts", callback_data="scheduled_posts")],
+        [InlineKeyboardButton("👥 User Management", callback_data="user_mgmt")],
+        [InlineKeyboardButton("⚙️ Settings", callback_data="settings")]
+    ])
 
-# ===== TELEGRAM HANDLERS =====
+def post_options_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Add Button", callback_data="add_button")],
+        [InlineKeyboardButton("⏱ Schedule", callback_data="schedule_post")],
+        [InlineKeyboardButton("📤 Post Now", callback_data="post_now")],
+        [InlineKeyboardButton("🔙 Back", callback_data="main_menu")]
+    ])
+
+# ===== HANDLERS =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send welcome message"""
-    await update.message.reply_text(
-        "🖼️ Media Processor Bot\n\n"
-        "Send me photos/videos to add watermarks!\n"
-        "I can auto-process channel posts when added as admin."
+    """Send welcome message with main menu"""
+    user = update.effective_user
+    welcome_text = (
+        f"👋 Welcome {user.first_name} to Channel Manager Pro!\n\n"
+        "📢 Create and schedule posts across multiple channels\n"
+        "👥 Manage subscribers and welcome messages\n"
+        "⏱ Automate your content delivery\n\n"
+        "What would you like to do today?"
+    )
+    
+    if update.message:
+        await update.message.reply_text(welcome_text, reply_markup=main_menu_keyboard())
+    elif update.callback_query:
+        await update.callback_query.edit_message_text(welcome_text, reply_markup=main_menu_keyboard())
+
+async def handle_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Manage connected channels"""
+    query = update.callback_query
+    await query.answer()
+    
+    channels = channels_db.all()
+    if not channels:
+        text = "No channels connected yet!\n\nClick below to add your first channel:"
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Add Channel", callback_data="add_channel")],
+            [InlineKeyboardButton("🔙 Back", callback_data="main_menu")]
+        ])
+    else:
+        text = "📢 Your Connected Channels:\n\n"
+        buttons = []
+        for channel in channels:
+            text += f"• {channel['title']} (ID: {channel['id']})\n"
+            buttons.append([InlineKeyboardButton(
+                f"⚙️ {channel['title']}", 
+                callback_data=f"channel_{channel['id']}"
+            )])
+        
+        buttons.append([InlineKeyboardButton("➕ Add Channel", callback_data="add_channel")])
+        buttons.append([InlineKeyboardButton("🔙 Back", callback_data="main_menu")])
+        keyboard = InlineKeyboardMarkup(buttons)
+    
+    await query.edit_message_text(text, reply_markup=keyboard)
+
+async def create_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Post creation workflow"""
+    query = update.callback_query
+    await query.answer()
+    
+    context.user_data['creating_post'] = True
+    await query.edit_message_text(
+        "✍️ Send me the content for your post (text, photo, video, or document):\n\n"
+        "You can add formatting like:\n"
+        "*bold* _italic_ `code` [links](https://example.com)",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Cancel", callback_data="main_menu")]
+        ])
     )
 
-async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Process incoming media"""
-    message = update.message or update.channel_post
-    if not message:
-        return
+async def schedule_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Schedule post for later"""
+    query = update.callback_query
+    await query.answer()
     
-    # Get media file
-    if message.photo:
-        file = await message.photo[-1].get_file()
-        media_type = "photo"
-    elif message.video:
-        file = await message.video.get_file()
-        media_type = "video"
-    else:
-        if update.message:  # Only reply to private chats
-            await update.message.reply_text("Please send a photo or video.")
-        return
-    
-    # Process media
-    input_path = tempfile.mktemp()
-    output_path = tempfile.mktemp(suffix=".png" if media_type == "photo" else ".mp4")
-    
-    try:
-        await file.download_to_drive(input_path)
-        
-        success = await (
-            process_image(input_path, output_path)
-            if media_type == "photo"
-            else process_video(input_path, output_path)
-        )
-        
-        if not success:
-            raise Exception("Processing failed")
-        
-        with open(output_path, "rb") as f:
-            if update.channel_post:  # Edit channel post
-                await context.bot.edit_message_media(
-                    chat_id=message.chat_id,
-                    message_id=message.message_id,
-                    media=(
-                        InputMediaPhoto(f)
-                        if media_type == "photo"
-                        else InputMediaVideo(f)
-                    )
-                )
-            else:  # Send to private chat
-                await context.bot.send_media(
-                    chat_id=message.chat_id,
-                    media=(
-                        InputMediaPhoto(f, caption="Processed!")
-                        if media_type == "photo"
-                        else InputMediaVideo(f, caption="Processed!")
-                    )
-                )
+    await query.edit_message_text(
+        "⏰ When should I send this post?\n\n"
+        "Send date/time in format: DD-MM-YYYY HH:MM\n"
+        "Example: 15-05-2023 14:30",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Back", callback_data="post_options")]
+        ])
+    )
+    context.user_data['awaiting_schedule'] = True
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle all incoming messages"""
+    if update.message:
+        if context.user_data.get('creating_post'):
+            # Store post content
+            context.user_data['post_content'] = {
+                'text': update.message.text or update.message.caption,
+                'type': 'text',
+                'media': None
+            }
+            
+            if update.message.photo:
+                context.user_data['post_content']['type'] = 'photo'
+                context.user_data['post_content']['media'] = update.message.photo[-1].file_id
+            elif update.message.video:
+                context.user_data['post_content']['type'] = 'video'
+                context.user_data['post_content']['media'] = update.message.video.file_id
+            
+            await update.message.reply_text(
+                "✅ Post content saved! Choose an option:",
+                reply_markup=post_options_keyboard()
+            )
+            del context.user_data['creating_post']
+            
+        elif context.user_data.get('awaiting_schedule'):
+            try:
+                schedule_time = datetime.strptime(update.message.text, "%d-%m-%Y %H:%M")
+                schedule_time = TIMEZONE.localize(schedule_time)
                 
-    except Exception as e:
-        logger.error(f"Failed to handle media: {e}")
-        if update.message:
-            await update.message.reply_text(f"❌ Error: {str(e)}")
-    finally:
-        for path in [input_path, output_path]:
-            if path and os.path.exists(path):
-                try: os.remove(path)
-                except: pass
+                if schedule_time < datetime.now(TIMEZONE):
+                    await update.message.reply_text("⚠️ Please enter a future date/time")
+                    return
+                
+                # Store scheduled post
+                post_id = scheduled_posts_db.insert({
+                    'content': context.user_data['post_content'],
+                    'schedule_time': schedule_time.timestamp(),
+                    'channels': context.user_data.get('selected_channels', []),
+                    'user_id': update.message.from_user.id
+                })
+                
+                await update.message.reply_text(
+                    f"✅ Post scheduled for {schedule_time.strftime('%d %b %Y at %H:%M')}",
+                    reply_markup=main_menu_keyboard()
+                )
+                del context.user_data['awaiting_schedule']
+                
+                # Schedule the task
+                delay = (schedule_time - datetime.now(TIMEZONE)).total_seconds()
+                asyncio.create_task(send_scheduled_post(context.application, post_id, delay))
+                
+            except ValueError:
+                await update.message.reply_text("⚠️ Invalid format. Please use DD-MM-YYYY HH:MM")
+
+async def send_scheduled_post(app, post_id, delay):
+    """Send scheduled post after delay"""
+    await asyncio.sleep(delay)
+    post = scheduled_posts_db.get(doc_id=post_id)
+    
+    if post:
+        content = post['content']
+        for channel_id in post['channels']:
+            try:
+                if content['type'] == 'text':
+                    await app.bot.send_message(
+                        chat_id=channel_id,
+                        text=content['text'],
+                        parse_mode="Markdown"
+                    )
+                elif content['type'] == 'photo':
+                    await app.bot.send_photo(
+                        chat_id=channel_id,
+                        photo=content['media'],
+                        caption=content['text'],
+                        parse_mode="Markdown"
+                    )
+                elif content['type'] == 'video':
+                    await app.bot.send_video(
+                        chat_id=channel_id,
+                        video=content['media'],
+                        caption=content['text'],
+                        parse_mode="Markdown"
+                    )
+            except Exception as e:
+                logger.error(f"Failed to send post to {channel_id}: {e}")
+        
+        scheduled_posts_db.remove(doc_ids=[post_id])
 
 # ===== MAIN =====
 def main():
     """Start the bot"""
     app = Application.builder().token(TOKEN).build()
     
-    # Add handlers
+    # Commands
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(
-        filters.PHOTO | filters.VIDEO | filters.ChatType.CHANNEL,
-        handle_media
-    ))
     
-    # Webhook configuration
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.getenv("PORT", 8443)),
-        url_path=TOKEN,
-        webhook_url=f"{os.getenv('WEBHOOK_URL')}/{TOKEN}",
-        secret_token=os.getenv("SECRET_TOKEN", "default_secret_123")
-    )
+    # Callbacks
+    app.add_handler(CallbackQueryHandler(start, pattern="^main_menu$"))
+    app.add_handler(CallbackQueryHandler(handle_channels, pattern="^channel_mgmt$"))
+    app.add_handler(CallbackQueryHandler(create_post, pattern="^create_post$"))
+    app.add_handler(CallbackQueryHandler(schedule_post, pattern="^schedule_post$"))
+    
+    # Messages
+    app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_message))
+    
+    # Scheduled tasks
+    app.job_queue.run_repeating(check_scheduled_posts, interval=300, first=10)
+    
+    # Start
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
