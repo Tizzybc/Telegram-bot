@@ -1,7 +1,6 @@
 import os
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, Filters, ContextTypes
-from PIL import Image
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypesfrom PIL import Image
 import moviepy.editor as mp
 import tempfile
 import logging
