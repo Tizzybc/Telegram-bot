@@ -1,4 +1,4 @@
-python-telegram-bot[webhooks]==20.8
-pytz==2023.3
-tinydb==4.8.0
-aiohttp==3.8.6
+aiogram==3.7.0
+sqlalchemy==2.0.30
+aiosqlite==0.20.0
+python-dotenv==1.0.0

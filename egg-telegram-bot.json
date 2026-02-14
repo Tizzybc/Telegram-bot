@@ -1,0 +1,83 @@
+{
+    "_comment": "Pterodactyl Egg for Telegram Management Bot",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2025-02-12T20:00:00+00:00",
+    "name": "Telegram Management Bot",
+    "author": "custom@example.com",
+    "description": "Telegram channel management bot with auto-comment and menu features",
+    "features": null,
+    "docker_images": {
+        "Python 3.11": "ghcr.io/parkervcp/yolks:python_3.11",
+        "Python 3.10": "ghcr.io/parkervcp/yolks:python_3.10"
+    },
+    "file_denylist": [],
+    "startup": "if [[ -f start.sh ]]; then bash start.sh; else python -u main.py; fi",
+    "config": {
+        "files": "{\n    \".env\": {\n        \"parser\": \"properties\",\n        \"find\": {\n            \"BOT_TOKEN\": \"BOT_TOKEN={{server.build.env.BOT_TOKEN}}\",\n            \"ADMIN_IDS\": \"ADMIN_IDS={{server.build.env.ADMIN_IDS}}\",\n            \"MY_CHANNEL_ID\": \"MY_CHANNEL_ID={{server.build.env.MY_CHANNEL_ID}}\"\n        }\n    }\n}",
+        "startup": "{\n    \"done\": \"Bot is ready!\"\n}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!\/bin\/bash\n\napt update\napt install -y git python3 python3-pip\n\ncd \/mnt\/server\n\nif [ ! -f requirements.txt ]; then\n    echo \"requirements.txt not found!\"\n    exit 1\nfi\n\npip3 install --upgrade pip\npip3 install -r requirements.txt\n\nif [ ! -f .env ]; then\n    cp .env.example .env\nfi\n\necho \"Installation complete!\"",
+            "container": "python:3.11-slim",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Bot Token",
+            "description": "Telegram Bot Token from @BotFather",
+            "env_variable": "BOT_TOKEN",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Admin IDs",
+            "description": "Comma-separated admin user IDs",
+            "env_variable": "ADMIN_IDS",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Channel ID",
+            "description": "Your Telegram channel ID (negative number)",
+            "env_variable": "MY_CHANNEL_ID",
+            "default_value": "-1001234567890",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "First Comment Enabled",
+            "description": "Enable/disable first comment feature",
+            "env_variable": "FIRST_COMMENT_ENABLED",
+            "default_value": "True",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:True,False",
+            "field_type": "text"
+        },
+        {
+            "name": "First Comment Text",
+            "description": "Text to post as first comment",
+            "env_variable": "FIRST_COMMENT_TEXT",
+            "default_value": "👇 Share your thoughts below!",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string",
+            "field_type": "text"
+        }
+    ]
+}
